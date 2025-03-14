@@ -32,12 +32,12 @@ runs:
 
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt
+        pip install -r ./web3-hosting-action/requirements.txt
       shell: bash
 
     - name: Upload on IPFS
       run: |
-          result=$(python ./publish-on-aleph.py $GITHUB_WORKSPACE/${{ inputs.path }})
+          result=$(python ./web3-hosting-action/publish-on-aleph.py ${{ inputs.path }})
           echo "IPFS_CID_V0=$(echo $result | jq -r '.cid_v0')" >> $GITHUB_ENV
           echo "IPFS_CID_V1=$(echo $result | jq -r '.cid_v1')" >> $GITHUB_ENV
       shell: bash
