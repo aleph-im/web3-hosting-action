@@ -1,6 +1,9 @@
 name: 'Aleph Web3 Hosting'
 description: "Deploy a website or dApp on Aleph's decentralized cloud"
 author: 'Aleph Cloud'
+branding:
+  icon: upload-cloud
+  color: blue
 
 inputs:
   path:
