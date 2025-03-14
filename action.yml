@@ -1,5 +1,5 @@
 name: 'Aleph Web3 Hosting'
-description: "Deploy a website or dApp on Aleph's decentralized cloud"
+description: "Deploy a website or dApp on Aleph Cloud"
 author: 'Aleph Cloud'
 branding:
   icon: upload-cloud
@@ -44,7 +44,7 @@ runs:
       shell: bash
 
 
-    - name: "Pin with Aleph"
+    - name: Pin with Aleph
       if: ${{ inputs.private-key != '' }}
       run: |
         mkdir --parents /home/runner/.aleph-im/private-keys

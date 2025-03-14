@@ -2,8 +2,8 @@
 
 ## What is it ?
 
-A GitHub action that deploys a website / dApp frontend on Aleph Cloud.
-For more information about Web3 Hosting, check [the documentation](https://docs.aleph.im/tools/web3-hosting)
+A GitHub action that deploys a website or dApp frontend on Aleph Cloud.
+For more information about Web3 Hosting with Aleph, check [the documentation](https://docs.aleph.im/tools/web3-hosting).
 
 ## Inputs
 
