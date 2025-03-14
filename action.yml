@@ -25,6 +25,13 @@ outputs:
 runs:
   using: 'composite'
   steps:
+
+    - name: Checkout my composite action repo
+      uses: actions/checkout@v4
+      with:
+        repository: aleph-im/web3-hosting-action
+        path: aleph-web3-hosting-action
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -32,12 +39,12 @@ runs:
 
     - name: Install dependencies
       run: |
-        pip install -r ./web3-hosting-action/requirements.txt
+        pip install -r ./aleph-web3-hosting-action/requirements.txt
       shell: bash
 
     - name: Upload on IPFS
       run: |
-          result=$(python ./web3-hosting-action/publish-on-aleph.py ${{ inputs.path }})
+          result=$(python ./aleph-web3-hosting-action/publish-on-aleph.py ${{ inputs.path }})
           echo "IPFS_CID_V0=$(echo $result | jq -r '.cid_v0')" >> $GITHUB_ENV
           echo "IPFS_CID_V1=$(echo $result | jq -r '.cid_v1')" >> $GITHUB_ENV
       shell: bash
@@ -63,26 +70,21 @@ runs:
 
           ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
 
-    - name: Exit if no domain to link
-      if: ${{ inputs.domain == '' }}
-      run: |
-        exit 0
-      shell: bash
-
     - name: Check if private key is present for linking
-      if: ${{ inputs.private-key == '' }}
+      if: ${{ inputs.domain != '' && inputs.private-key == '' }}
       run: |
         echo "::error ::You must pass your private key to link the domain."
         exit 1
       shell: bash
 
     - name: Link domain
+      if: ${{ inputs.domain != '' }}
       run: |
         echo 'y' | aleph domain attach ${{ inputs.domain }} --item-hash $ITEM_HASH
       shell: bash
 
     - name: Comment domain deploy on the PR
-      if: ${{ github.event_name == 'pull_request' }}
+      if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
       uses: thollander/actions-comment-pull-request@v3
       with:
         message: |
