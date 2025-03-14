@@ -61,8 +61,7 @@ runs:
           Deployed on:
           - https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
 
-          ${{ if inputs.private-key == '' }}:
-            > This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.
+          ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
 
     - name: Exit if no domain to link
       if: ${{ inputs.domain == '' }}
@@ -87,8 +86,4 @@ runs:
       uses: thollander/actions-comment-pull-request@v3
       with:
         message: |
-          Deployed on:
-          - https://${{ inputs.domain }}
-
-          ${{ if inputs.private-key == '' }}:
-            > This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.
+          Deployed on https://${{ inputs.domain }}
