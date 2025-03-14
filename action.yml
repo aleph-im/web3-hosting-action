@@ -1,0 +1,91 @@
+name: 'Aleph Web3 Hosting'
+description: "Deploy a website or dApp on Aleph's decentralized cloud"
+author: 'Aleph Cloud'
+
+inputs:
+  path:
+    description: "Path to the static website's files (eg frontend/out)"
+    required: true
+  private-key:
+    description: 'The private key of the Ethereum wallet to use'
+    required: false
+  domain:
+    description: 'Domain name to link to the deployed site (eg libertai.io)'
+    required: false
+    default: ''
+
+outputs:
+  result:
+    description: 'The output of the script'
+    value: ${{ steps.run-script.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.11
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+      shell: bash
+
+    - name: Upload on IPFS
+      run: |
+          result=$(python ./publish-on-aleph.py $GITHUB_WORKSPACE/${{ inputs.path }})
+          echo "IPFS_CID_V0=$(echo $result | jq -r '.cid_v0')" >> $GITHUB_ENV
+          echo "IPFS_CID_V1=$(echo $result | jq -r '.cid_v1')" >> $GITHUB_ENV
+      shell: bash
+
+
+    - name: "Pin with Aleph"
+      if: ${{ inputs.private-key != '' }}
+      run: |
+        mkdir --parents /home/runner/.aleph-im/private-keys
+        echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
+
+        pip install 'git+https://github.com/aleph-im/aleph-client@1.4.0'
+        ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
+      shell: bash
+
+    - name: Comment deploy on the PR
+      if: ${{ github.event_name == 'pull_request' && inputs.domain == '' }}
+      uses: thollander/actions-comment-pull-request@v3
+      with:
+        message: |
+          Deployed on:
+          - https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
+
+          ${{ if inputs.private-key == '' }}:
+            > This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.
+
+    - name: Exit if no domain to link
+      if: ${{ inputs.domain == '' }}
+      run: |
+        exit 0
+      shell: bash
+
+    - name: Check if private key is present for linking
+      if: ${{ inputs.private-key == '' }}
+      run: |
+        echo "::error ::You must pass your private key to link the domain."
+        exit 1
+      shell: bash
+
+    - name: Link domain
+      run: |
+        echo 'y' | aleph domain attach ${{ inputs.domain }} --item-hash $ITEM_HASH
+      shell: bash
+
+    - name: Comment domain deploy on the PR
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: thollander/actions-comment-pull-request@v3
+      with:
+        message: |
+          Deployed on:
+          - https://${{ inputs.domain }}
+
+          ${{ if inputs.private-key == '' }}:
+            > This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.
