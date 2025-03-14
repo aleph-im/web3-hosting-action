@@ -76,6 +76,7 @@ runs:
 
           ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
         edit-mode: replace
+      continue-on-error: true
 
     - name: Check if private key is present for linking
       if: ${{ inputs.domain != '' && inputs.private-key == '' }}
@@ -99,3 +100,4 @@ runs:
         body: |
           Deployed on https://${{ inputs.domain }}
         edit-mode: replace
+      continue-on-error: true
