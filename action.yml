@@ -17,11 +17,6 @@ inputs:
     required: false
     default: ''
 
-outputs:
-  result:
-    description: 'The output of the script'
-    value: ${{ steps.run-script.outputs.result }}
-
 runs:
   using: 'composite'
   steps:
