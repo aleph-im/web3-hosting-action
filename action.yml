@@ -25,7 +25,6 @@ outputs:
 runs:
   using: 'composite'
   steps:
-
     - name: Checkout my composite action repo
       uses: actions/checkout@v4
       with:
@@ -69,6 +68,7 @@ runs:
           - https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
 
           ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
+      continue-on-error: true
 
     - name: Check if private key is present for linking
       if: ${{ inputs.domain != '' && inputs.private-key == '' }}
@@ -89,3 +89,4 @@ runs:
       with:
         message: |
           Deployed on https://${{ inputs.domain }}
+      continue-on-error: true
