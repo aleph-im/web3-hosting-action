@@ -59,16 +59,28 @@ runs:
         ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
       shell: bash
 
+
+    - name: Find existing PR comment
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: peter-evans/find-comment@v3
+      id: fc
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: Deployed on
+
     - name: Comment deploy on the PR
       if: ${{ github.event_name == 'pull_request' && inputs.domain == '' }}
-      uses: thollander/actions-comment-pull-request@v3
+      uses: peter-evans/create-or-update-comment@v4
       with:
-        message: |
+        comment-id: ${{ steps.fc.outputs.comment-id }}
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
           Deployed on:
           - https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
 
           ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
-      continue-on-error: true
+        edit-mode: replace
 
     - name: Check if private key is present for linking
       if: ${{ inputs.domain != '' && inputs.private-key == '' }}
@@ -85,8 +97,10 @@ runs:
 
     - name: Comment domain deploy on the PR
       if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
-      uses: thollander/actions-comment-pull-request@v3
+      uses: peter-evans/create-or-update-comment@v4
       with:
-        message: |
+        comment-id: ${{ steps.fc.outputs.comment-id }}
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
           Deployed on https://${{ inputs.domain }}
-      continue-on-error: true
+        edit-mode: replace
