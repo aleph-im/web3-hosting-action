@@ -20,6 +20,10 @@ inputs:
     description: "Delete files older than this number of days. Leave blank to skip deletion"
     required: false
     default: ""
+outputs:
+  url:
+    value: ${{ steps.set-outputs.outputs.url }}
+    description: "The deployed URL to access the website"
 
 
 runs:
@@ -42,15 +46,15 @@ runs:
       shell: bash
 
     - name: Upload on IPFS
+      shell: bash
       run: |
           result=$(python ./aleph-web3-hosting-action/publish-on-aleph.py ${{ inputs.path }})
           echo "IPFS_CID_V0=$(echo $result | jq -r '.cid_v0')" >> $GITHUB_ENV
           echo "IPFS_CID_V1=$(echo $result | jq -r '.cid_v1')" >> $GITHUB_ENV
-      shell: bash
-
 
     - name: Pin with Aleph
       if: ${{ inputs.private-key != '' }}
+      shell: bash
       run: |
         mkdir --parents /home/runner/.aleph-im/private-keys
         echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
@@ -58,8 +62,6 @@ runs:
         pip install 'git+https://github.com/aleph-im/aleph-client@1.5.1'
         ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
         echo "ITEM_HASH=$ITEM_HASH" >> $GITHUB_ENV
-      shell: bash
-
 
     - name: Find existing PR comment
       if: ${{ github.event_name == 'pull_request' }}
@@ -86,16 +88,16 @@ runs:
 
     - name: Check if private key is present for linking
       if: ${{ inputs.domain != '' && inputs.private-key == '' }}
+      shell: bash
       run: |
         echo "::error ::You must pass your private key to link the domain."
         exit 1
-      shell: bash
 
     - name: Link domain
       if: ${{ inputs.domain != '' }}
+      shell: bash
       run: |
         echo 'y' | aleph domain attach ${{ inputs.domain }} --item-hash $ITEM_HASH
-      shell: bash
 
     - name: Comment domain deploy on the PR
       if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
@@ -110,6 +112,7 @@ runs:
 
     - name: Run stale file cleanup
       if: ${{ inputs.retention_days != '' }}
+      shell: bash
       run: |
           set -euo pipefail
 
@@ -135,4 +138,14 @@ runs:
               echo "Skipping fresh file (created: $CREATED)"
             fi
           done
+
+    - name: Set outputs
+      id: set-outputs
       shell: bash
+      run: |
+        if [[ -n "${{ inputs.domain }}" ]]; then
+          URL=https://${{ inputs.domain }}
+        else
+          URL=https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
+        fi
+        echo "url=$url" >> "$GITHUB_OUTPUT"
