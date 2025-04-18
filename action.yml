@@ -17,6 +17,7 @@ inputs:
     required: false
     default: ''
 
+
 runs:
   using: 'composite'
   steps:
@@ -50,7 +51,7 @@ runs:
         mkdir --parents /home/runner/.aleph-im/private-keys
         echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
 
-        pip install 'git+https://github.com/aleph-im/aleph-client@1.4.0'
+        pip install 'git+https://github.com/aleph-im/aleph-client@1.5.1'
         ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
       shell: bash
 
