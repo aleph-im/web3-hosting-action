@@ -85,15 +85,33 @@ jobs:
 
 > 💡 Previews will be garbage-collected after some time, for production usage please pass the private key of a wallet holding a sufficient amount of ALEPH tokens.
 
+### Remove older files
+
+Deploying a new version of your site will change the IPFS file your domain points to, but won't delete the files of older versions.\
+You can use the `retention_days` parameter to automatically delete all the Aleph files in your account that are older than this number of days.
+
+> ⚠️ Use this only if you are using this Aleph account only for deploying this website (which is recommended for security reasons), or this could remove files that you uploaded with the same wallet for other purposes.
+
+```yml
+- name: Deploy on Aleph
+  uses: aleph-im/web3-hosting-action@v1
+  with:
+    path: 'out'
+    private-key: ${{ secrets.ALEPH_PRIVATE_KEY }}
+    domain: your-website.com
+    retention_days: 30
+```
+
 ## Inputs
 
 ### Action inputs
 
-| Name          | Description                                                       | Required | Default |
-| ------------- | ----------------------------------------------------------------- | -------- | ------- |
-| `path`        | Path to the static website's files (eg frontend/out)              | ✅        |         |
-| `private-key` | The private key of the Ethereum wallet to use to connect to Aleph |          |         |
-| `domain`      | Domain name to link to the deployed site (eg libertai.io)         |          |         |
+| Name             | Description                                                               | Required | Default |
+| ---------------- | ------------------------------------------------------------------------- | -------- | ------- |
+| `path`           | Path to the static website's files (eg frontend/out)                      | ✅        |         |
+| `private-key`    | The private key of the Ethereum wallet to use to connect to Aleph         |          |         |
+| `domain`         | Domain name to link to the deployed site (eg libertai.io)                 |          |         |
+| `retention_days` | Delete files older than this number of days. Leave blank to skip deletion |          |         |
 
 ## Outputs
 

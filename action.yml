@@ -16,6 +16,10 @@ inputs:
     description: 'Domain name to link to the deployed site (eg libertai.io)'
     required: false
     default: ''
+  retention_days:
+    description: "Delete files older than this number of days. Leave blank to skip deletion"
+    required: false
+    default: ""
 
 
 runs:
@@ -103,3 +107,32 @@ runs:
           Deployed on https://${{ inputs.domain }}
         edit-mode: replace
       continue-on-error: true
+
+    - name: Run stale file cleanup
+      if: ${{ inputs.retention_days != '' }}
+      run: |
+          set -euo pipefail
+
+          STALE_DAYS="${{ inputs.retention_days }}"
+
+          # Get current UTC timestamp and threshold if stale_days is set
+          echo "Checking for files older than $STALE_DAYS days..."
+          THRESHOLD=$(date -u -d "-$STALE_DAYS days" +"%Y-%m-%dT%H:%M:%S")
+          echo "Threshold time: $THRESHOLD"
+
+          # Get Aleph files
+          JSON_OUTPUT=$(aleph file list --json)
+
+          # Loop through files and delete stale ones
+          echo "$JSON_OUTPUT" | jq -c '.files[]' | while read -r file; do
+            CREATED=$(echo "$file" | jq -r '.created')
+            ITEM_HASH=$(echo "$file" | jq -r '.item_hash')
+
+            if [[ "$CREATED" < "$THRESHOLD" ]]; then
+              echo "Deleting stale file with item_hash: $ITEM_HASH (created: $CREATED)"
+              aleph file forget "$ITEM_HASH"
+            else
+              echo "Skipping fresh file (created: $CREATED)"
+            fi
+          done
+      shell: bash
