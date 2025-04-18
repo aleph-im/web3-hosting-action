@@ -53,6 +53,7 @@ runs:
 
         pip install 'git+https://github.com/aleph-im/aleph-client@1.5.1'
         ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
+        echo "ITEM_HASH=$ITEM_HASH" >> $GITHUB_ENV
       shell: bash
 
 
