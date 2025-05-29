@@ -42,4 +42,4 @@ async def publish_site(multiaddr: str, path: str) -> str:
 if __name__ == "__main__":
     path = sys.argv[1]
     logging.basicConfig(level=logging.INFO)
-    print(asyncio.run(publish_site("/dns6/ipfs-2.aleph.im/tcp/443/https", path)))
+    print(asyncio.run(publish_site("/dns4/ipfs-2.aleph.im/tcp/443/https", path)))
