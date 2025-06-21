@@ -45,9 +45,6 @@ runs:
         pip install -r ./aleph-web3-hosting-action/requirements.txt
       shell: bash
 
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
-
     - name: Upload on IPFS
       shell: bash
       run: |
