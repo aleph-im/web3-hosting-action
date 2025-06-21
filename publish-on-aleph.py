@@ -1,45 +1,46 @@
 #!/usr/bin/env python3
-
-"""
-This script uploads the build SPA to IPFS.
-It does not pin it or do anything else yet, so the result can only be accessed
-as long as the files are not garbage collected.
-"""
-
-import asyncio
-import logging
-from pathlib import Path
-import sys
-from cid import make_cid
-import aioipfs
+import requests
 import json
+import sys
+from pathlib import Path
+from cid import make_cid
 
-logger = logging.getLogger(__file__)
+def upload_with_requests(folder: Path, gateway: str):
+    url = f"{gateway}/api/v0/add"
+    params = {
+        "recursive": "true",
+        "wrap-with-directory": "true"
+    }
 
-async def upload_site(files: list[Path], multiaddr: str) -> str:
-    client = aioipfs.AsyncIPFS(maddr=multiaddr)
-
-    try:
-        cid_v0 = None
-        async for added_file in client.add(*files, recursive=True):
-            logger.debug(
-                f"Uploaded file {added_file['Name']} with CID: {added_file['Hash']}"
+    # Prepare file data like curl -F file=@./dist/
+    files = []
+    for path in folder.rglob("*"):
+        if path.is_file():
+            relative_path = path.relative_to(folder.parent)
+            files.append(
+                ("file", (str(relative_path), open(path, "rb")))
             )
-            cid_v0 = added_file["Hash"]
 
-        # The last CID is the CID of the directory uploaded
-        cid_v1 = make_cid(cid_v0).to_v1().encode('base32').decode('utf-8')
-        return json.dumps({"cid_v0": cid_v0, "cid_v1": cid_v1})
-    finally:
-        await client.close()
+    response = requests.post(url, params=params, files=files)
+    response.raise_for_status()
 
+    # Parse the response line-by-line
+    cid_v0 = None
+    for line in response.text.strip().splitlines():
+        entry = json.loads(line)
+        cid_v0 = entry.get("Hash")
 
-async def publish_site(multiaddr: str, path: str) -> str:
-    cid = await upload_site(files=[path], multiaddr=multiaddr)
-    return cid
+    if not cid_v0:
+        raise RuntimeError("CID not found in response.")
 
+    cid_v1 = make_cid(cid_v0).to_v1().encode("base32").decode()
+    return {"cid_v0": cid_v0, "cid_v1": cid_v1}
 
 if __name__ == "__main__":
-    path = sys.argv[1]
-    logging.basicConfig(level=logging.INFO)
-    print(asyncio.run(publish_site("/dns4/ipfs-2.aleph.im/tcp/443/https", path)))
+    path = Path(sys.argv[1])
+    if not path.is_dir():
+        print("Error: path must be a directory")
+        sys.exit(1)
+
+    result = upload_with_requests(path.resolve(), "https://ipfs-2.aleph.im")
+    print(json.dumps(result))
