@@ -16,7 +16,7 @@ def upload_with_requests(folder: Path, gateway: str):
     files = []
     for path in folder.rglob("*"):
         if path.is_file():
-            relative_path = path.relative_to(folder.parent)
+            relative_path = path.relative_to(folder)
             files.append(
                 ("file", (str(relative_path), open(path, "rb")))
             )
