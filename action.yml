@@ -59,9 +59,19 @@ runs:
         mkdir --parents /home/runner/.aleph-im/private-keys
         echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
 
-        pip install 'git+https://github.com/aleph-im/aleph-client@1.5.1'
-        ITEM_HASH=$(aleph file pin ${{ env.IPFS_CID_V0 }} | jq -r '.item_hash')
-        echo "ITEM_HASH=$ITEM_HASH" >> $GITHUB_ENV
+        pip install 'git+https://github.com/aleph-im/aleph-client@1.6.1'
+
+        TMP_JSON=$(mktemp)
+        timeout 30s aleph file pin ${{ env.IPFS_CID_V0 }} > $TMP_JSON 2>/tmp/aleph_err.log || echo "Command timed out (likely safe to ignore)"
+
+        if [ -s "$TMP_JSON" ]; then
+          ITEM_HASH=$(jq -r '.item_hash' < $TMP_JSON)
+          echo "ITEM_HASH=$ITEM_HASH" >> $GITHUB_ENV
+        else
+          echo "❌ No output captured from aleph file pin"
+          exit 1
+        fi
+
 
     - name: Find existing PR comment
       if: ${{ github.event_name == 'pull_request' }}
@@ -97,7 +107,7 @@ runs:
       if: ${{ inputs.domain != '' }}
       shell: bash
       run: |
-        echo 'y' | aleph domain attach ${{ inputs.domain }} --item-hash $ITEM_HASH
+        timeout 30s bash -c "echo 'y' | aleph domain attach '${{ inputs.domain }}' --item-hash $ITEM_HASH"
 
     - name: Comment domain deploy on the PR
       if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
@@ -124,18 +134,27 @@ runs:
           echo "Threshold time: $THRESHOLD"
 
           # Get Aleph files
-          JSON_OUTPUT=$(aleph file list --json)
+          LIST_OUTPUT=$(mktemp)
+
+          timeout 20s aleph file list --json > "$LIST_OUTPUT" 2>/tmp/aleph_list_err.log || echo "Command timed out (likely safe to ignore)"
+
+          if [ -s "$LIST_OUTPUT" ]; then
+            echo "List output present"
+          else
+            echo "❌ No output captured from aleph file list"
+            exit 1
+          fi
 
           # Loop through files and delete stale ones
-          echo "$JSON_OUTPUT" | jq -c '.files[]' | while read -r file; do
+          jq -c '.files[]?' < "$LIST_OUTPUT" | while read -r file; do
             CREATED=$(echo "$file" | jq -r '.created')
             ITEM_HASH=$(echo "$file" | jq -r '.item_hash')
 
             if [[ "$CREATED" < "$THRESHOLD" ]]; then
               echo "Deleting stale file with item_hash: $ITEM_HASH (created: $CREATED)"
-              aleph file forget "$ITEM_HASH"
+              timeout 20s aleph file forget "$ITEM_HASH" 2>/tmp/aleph_forget_err.log || echo "⚠️ Timeout deleting $ITEM_HASH"
             else
-              echo "Skipping fresh file (created: $CREATED)"
+              echo "✅ Skipping fresh file (created: $CREATED)"
             fi
           done
 
