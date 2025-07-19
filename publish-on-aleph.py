@@ -42,5 +42,5 @@ if __name__ == "__main__":
         print("Error: path must be a directory")
         sys.exit(1)
 
-    result = upload_with_requests(path.resolve(), "https://ipfs-2.aleph.im")
+    result = upload_with_requests(path.resolve(), "http://ipfs-2.aleph.im")
     print(json.dumps(result))
