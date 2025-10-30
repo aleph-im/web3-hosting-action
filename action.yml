@@ -62,7 +62,7 @@ runs:
         pip install 'git+https://github.com/aleph-im/aleph-client@1.6.1'
 
         TMP_JSON=$(mktemp)
-        timeout 30s aleph file pin ${{ env.IPFS_CID_V0 }} > $TMP_JSON 2>/tmp/aleph_err.log || echo "Command timed out (likely safe to ignore)"
+        aleph file pin ${{ env.IPFS_CID_V0 }} > $TMP_JSON 2>/tmp/aleph_err.log
 
         if [ -s "$TMP_JSON" ]; then
           ITEM_HASH=$(jq -r '.item_hash' < $TMP_JSON)
@@ -107,7 +107,7 @@ runs:
       if: ${{ inputs.domain != '' }}
       shell: bash
       run: |
-        timeout 30s bash -c "echo 'y' | aleph domain attach '${{ inputs.domain }}' --item-hash $ITEM_HASH"
+        bash -c "echo 'y' | aleph domain attach '${{ inputs.domain }}' --item-hash $ITEM_HASH"
 
     - name: Comment domain deploy on the PR
       if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
@@ -128,21 +128,26 @@ runs:
 
           STALE_DAYS="${{ inputs.retention_days }}"
 
-          # Get current UTC timestamp and threshold if stale_days is set
           echo "Checking for files older than $STALE_DAYS days..."
           THRESHOLD=$(date -u -d "-$STALE_DAYS days" +"%Y-%m-%dT%H:%M:%S")
           echo "Threshold time: $THRESHOLD"
 
-          # Get Aleph files
           LIST_OUTPUT=$(mktemp)
+          ERR_LOG=/tmp/aleph_list_err.log
 
-          timeout 20s aleph file list --json > "$LIST_OUTPUT" 2>/tmp/aleph_list_err.log || echo "Command timed out (likely safe to ignore)"
+          echo "Fetching Aleph files..."
+          aleph file list --json > "$LIST_OUTPUT" 2>"$ERR_LOG" || true
 
-          if [ -s "$LIST_OUTPUT" ]; then
-            echo "List output present"
-          else
+          if [ ! -s "$LIST_OUTPUT" ]; then
             echo "❌ No output captured from aleph file list"
+            cat "$ERR_LOG" || true
             exit 1
+          fi
+
+          if grep -qE "Failed to retrieve files|Status code" "$LIST_OUTPUT"; then
+            echo "⚠️ Aleph returned an error instead of JSON:"
+            cat "$LIST_OUTPUT"
+            exit 0
           fi
 
           # Loop through files and delete stale ones
@@ -151,8 +156,8 @@ runs:
             ITEM_HASH=$(echo "$file" | jq -r '.item_hash')
 
             if [[ "$CREATED" < "$THRESHOLD" ]]; then
-              echo "Deleting stale file with item_hash: $ITEM_HASH (created: $CREATED)"
-              timeout 20s aleph file forget "$ITEM_HASH" 2>/tmp/aleph_forget_err.log || echo "⚠️ Timeout deleting $ITEM_HASH"
+              echo "🗑️ Deleting stale file with item_hash: $ITEM_HASH (created: $CREATED)"
+              aleph file forget "$ITEM_HASH" 2>/tmp/aleph_forget_err.log
             else
               echo "✅ Skipping fresh file (created: $CREATED)"
             fi
