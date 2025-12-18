@@ -3,7 +3,7 @@ import requests
 import json
 import sys
 from pathlib import Path
-from cid import make_cid
+# from cid import make_cid
 
 def upload_with_requests(folder: Path, gateway: str):
     url = f"{gateway}/api/v0/add"
@@ -33,8 +33,8 @@ def upload_with_requests(folder: Path, gateway: str):
     if not cid_v0:
         raise RuntimeError("CID not found in response.")
 
-    cid_v1 = make_cid(cid_v0).to_v1().encode("base32").decode()
-    return {"cid_v0": cid_v0, "cid_v1": cid_v1}
+    # cid_v1 = make_cid(cid_v0).to_v1().encode("base32").decode()
+    return {"cid_v0": cid_v0, "cid_v1": ""}
 
 if __name__ == "__main__":
     path = Path(sys.argv[1])
