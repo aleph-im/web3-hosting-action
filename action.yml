@@ -59,7 +59,8 @@ runs:
         mkdir --parents /home/runner/.aleph-im/private-keys
         echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
 
-        pip install 'git+https://github.com/aleph-im/aleph-client@1.6.1'
+        pip install 'git+https://github.com/aleph-im/aleph-client@1.9.0'
+        pip install "pycares==4.11.0"
 
         TMP_JSON=$(mktemp)
         aleph file pin ${{ env.IPFS_CID_V0 }} > $TMP_JSON 2>/tmp/aleph_err.log
@@ -71,7 +72,6 @@ runs:
           echo "❌ No output captured from aleph file pin"
           exit 1
         fi
-
 
     - name: Find existing PR comment
       if: ${{ github.event_name == 'pull_request' }}

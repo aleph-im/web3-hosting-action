@@ -1,1 +1,2 @@
 requests==2.32.4
+py-cid @ git+https://github.com/ipld/py-cid.git@b13b51774ac3309c3c28a8da6eeab6d1e75dcddc
