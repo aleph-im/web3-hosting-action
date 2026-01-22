@@ -3,7 +3,7 @@
 ## What is it ?
 
 A GitHub action that deploys a website or dApp frontend on Aleph Cloud.
-For more information about Web3 Hosting with Aleph, check [the documentation](https://docs.aleph.im/tools/web3-hosting).
+For more information about Web3 Hosting with Aleph, check [the documentation](https://docs.aleph.cloud/devhub/deploying-and-hosting/web-hosting/#web3-hosting-on-aleph-cloud).
 
 ## Usage
 
@@ -31,7 +31,7 @@ jobs:
       - run: npm build
 
       - name: Deploy on Aleph
-        uses: aleph-im/web3-hosting-action@v1.1.2
+        uses: aleph-im/web3-hosting-action@v1.1.4
         with:
           path: 'out'
           private-key: ${{ secrets.ALEPH_PRIVATE_KEY }}
@@ -45,7 +45,7 @@ A domain in the format `https://{ipfs-cid-v1}.ipfs.aleph.sh` will be allocated a
 
 ```yml
 - name: Deploy on Aleph
-  uses: aleph-im/web3-hosting-action@v1.1.2
+  uses: aleph-im/web3-hosting-action@v1.1.4
   with:
     path: 'out'
     private-key: ${{ secrets.ALEPH_PRIVATE_KEY }}
@@ -76,7 +76,7 @@ jobs:
       - run: npm build
 
       - name: Deploy on Aleph
-        uses: aleph-im/web3-hosting-action@v1.1.2
+        uses: aleph-im/web3-hosting-action@v1.1.4
         with:
           path: 'out'
 ```
@@ -94,7 +94,7 @@ You can use the `retention_days` parameter to automatically delete all the Aleph
 
 ```yml
 - name: Deploy on Aleph
-  uses: aleph-im/web3-hosting-action@v1.1.2
+  uses: aleph-im/web3-hosting-action@v1.1.4
   with:
     path: 'out'
     private-key: ${{ secrets.ALEPH_PRIVATE_KEY }}
@@ -127,7 +127,7 @@ You can get the following outputs from this actions:
 
 ```yml
 - name: Deploy on Aleph
-  uses: aleph-im/web3-hosting-action@v1.1.2
+  uses: aleph-im/web3-hosting-action@v1.1.4
   id: deploy
   with:
     path: 'out'
