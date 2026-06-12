@@ -1,40 +1,57 @@
 #!/usr/bin/env python3
-import requests
+"""Upload a directory to the Aleph IPFS gateway without authentication.
+
+Used for free previews: the content isn't pinned by any STORE message,
+so the gateway garbage-collects it ~24 hours after upload and no
+credits are consumed. Production deployments don't use this script,
+they go through the Aleph CLI instead (see action.yml).
+"""
 import json
 import sys
 from pathlib import Path
-from cid import make_cid
 
-def upload_with_requests(folder: Path, gateway: str):
+import requests
+
+IPFS_GATEWAY = "https://ipfs.aleph.cloud"
+
+
+def upload_directory(folder: Path, gateway: str) -> str:
     url = f"{gateway}/api/v0/add"
+    # cid-version=1 returns a base32 CID directly, as required for the
+    # case-insensitive subdomain gateway URLs (https://<cid>.ipfs.aleph.sh).
+    # raw-leaves matches the Aleph CLI upload defaults so a preview and a
+    # deployment of the same content produce the same CID.
     params = {
         "recursive": "true",
-        "wrap-with-directory": "true"
+        "wrap-with-directory": "true",
+        "cid-version": "1",
+        "raw-leaves": "true",
     }
 
-    # Prepare file data like curl -F file=@./dist/
+    # The filename of each part must be the path relative to the uploaded
+    # folder, or the gateway can't rebuild the directory tree / infer MIME
+    # types and serves everything as text/plain.
     files = []
-    for path in folder.rglob("*"):
+    for path in sorted(folder.rglob("*")):
         if path.is_file():
             relative_path = path.relative_to(folder)
-            files.append(
-                ("file", (str(relative_path), open(path, "rb")))
-            )
+            files.append(("file", (str(relative_path), open(path, "rb"))))
 
-    response = requests.post(url, params=params, files=files)
+    if not files:
+        raise RuntimeError(f"No files found in {folder}")
+
+    response = requests.post(url, params=params, files=files, timeout=1200)
     response.raise_for_status()
 
-    # Parse the response line-by-line
-    cid_v0 = None
-    for line in response.text.strip().splitlines():
-        entry = json.loads(line)
-        cid_v0 = entry.get("Hash")
+    # The response streams one JSON line per file; the wrapper directory
+    # containing the whole site is the last entry.
+    lines = response.text.strip().splitlines()
+    cid = json.loads(lines[-1]).get("Hash") if lines else None
 
-    if not cid_v0:
+    if not cid:
         raise RuntimeError("CID not found in response.")
+    return cid
 
-    cid_v1 = make_cid(cid_v0).to_v1().encode("base32").decode()
-    return {"cid_v0": cid_v0, "cid_v1": cid_v1}
 
 if __name__ == "__main__":
     path = Path(sys.argv[1])
@@ -42,5 +59,5 @@ if __name__ == "__main__":
         print("Error: path must be a directory")
         sys.exit(1)
 
-    result = upload_with_requests(path.resolve(), "https://ipfs-2.aleph.im")
-    print(json.dumps(result))
+    cid = upload_directory(path.resolve(), IPFS_GATEWAY)
+    print(json.dumps({"cid": cid}))
