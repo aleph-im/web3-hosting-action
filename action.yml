@@ -10,68 +10,93 @@ inputs:
     description: "Path to the static website's files (eg frontend/out)"
     required: true
   private-key:
-    description: 'The private key of the Ethereum wallet to use'
+    description: 'The private key of the Ethereum wallet used to sign the deployment'
     required: false
+    default: ''
+  owner-address:
+    description: 'Address of the wallet that owns the website and pays with its credits. Requires an authorization granted to the signing wallet. Leave blank to own and pay with the signing wallet directly'
+    required: false
+    default: ''
+  website-name:
+    description: 'Identifier of the website on your Aleph account. Defaults to the repository name'
+    required: false
+    default: ''
   domain:
     description: 'Domain name to link to the deployed site (eg libertai.io)'
     required: false
     default: ''
   retention_days:
-    description: "Delete files older than this number of days. Leave blank to skip deletion"
+    description: "Delete previous versions of this website older than this number of days. Leave blank to keep all versions"
     required: false
     default: ""
+
 outputs:
   url:
     value: ${{ steps.set-outputs.outputs.url }}
     description: "The deployed URL to access the website"
-
+  cid:
+    value: ${{ steps.set-outputs.outputs.cid }}
+    description: "The IPFS CID (v1) of the deployed files"
+  version:
+    value: ${{ steps.set-outputs.outputs.version }}
+    description: "The version number of the website on Aleph (empty for previews)"
 
 runs:
   using: 'composite'
   steps:
-    - name: Checkout my composite action repo
-      uses: actions/checkout@v6
-      with:
-        repository: aleph-im/web3-hosting-action
-        path: aleph-web3-hosting-action
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: 3.11
-
-    - name: Install dependencies
-      run: |
-        pip install -r ./aleph-web3-hosting-action/requirements.txt
+    - name: Select mode
+      id: mode
       shell: bash
-
-    - name: Upload on IPFS
-      shell: bash
+      env:
+        PRIVATE_KEY: ${{ inputs.private-key }}
       run: |
-          result=$(python ./aleph-web3-hosting-action/publish-on-aleph.py ${{ inputs.path }})
-          echo "IPFS_CID_V0=$(echo $result | jq -r '.cid_v0')" >> $GITHUB_ENV
-          echo "IPFS_CID_V1=$(echo $result | jq -r '.cid_v1')" >> $GITHUB_ENV
-
-    - name: Pin with Aleph
-      if: ${{ inputs.private-key != '' }}
-      shell: bash
-      run: |
-        mkdir --parents /home/runner/.aleph-im/private-keys
-        echo ${{ inputs.private-key }} | xxd -r -p > /home/runner/.aleph-im/private-keys/ethereum.key
-
-        pip install 'git+https://github.com/aleph-im/aleph-client@1.9.0'
-        pip install "pycares==4.11.0"
-
-        TMP_JSON=$(mktemp)
-        aleph file pin ${{ env.IPFS_CID_V0 }} > $TMP_JSON 2>/tmp/aleph_err.log
-
-        if [ -s "$TMP_JSON" ]; then
-          ITEM_HASH=$(jq -r '.item_hash' < $TMP_JSON)
-          echo "ITEM_HASH=$ITEM_HASH" >> $GITHUB_ENV
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" || -z "$PRIVATE_KEY" ]]; then
+          echo "preview=true" >> "$GITHUB_OUTPUT"
+          echo "Mode: preview (free, garbage-collected ~24h after upload)"
         else
-          echo "❌ No output captured from aleph file pin"
+          echo "preview=false" >> "$GITHUB_OUTPUT"
+          echo "Mode: deploy"
+        fi
+
+    - name: Check domain requirements
+      if: ${{ steps.mode.outputs.preview == 'true' && inputs.domain != '' }}
+      shell: bash
+      env:
+        PRIVATE_KEY: ${{ inputs.private-key }}
+        DOMAIN: ${{ inputs.domain }}
+      run: |
+        if [[ -z "$PRIVATE_KEY" ]]; then
+          echo "::error ::You must pass your private key to link a domain."
           exit 1
         fi
+        echo "::notice ::Previews never touch your domain: '$DOMAIN' is only linked when deploying outside of pull requests."
+
+    # ----- Preview flow (pull requests, or no private key) -----
+
+    - name: Set up Python
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      shell: bash
+      run: pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
+
+    - name: Upload preview on IPFS
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      shell: bash
+      env:
+        SITE_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        CID=$(python "$GITHUB_ACTION_PATH/publish-on-aleph.py" "$SITE_PATH" | jq -r '.cid')
+        if [[ -z "$CID" || "$CID" == "null" ]]; then
+          echo "::error ::No CID returned by the IPFS upload"
+          exit 1
+        fi
+        echo "IPFS_CID=$CID" >> "$GITHUB_ENV"
 
     - name: Find existing PR comment
       if: ${{ github.event_name == 'pull_request' }}
@@ -82,94 +107,219 @@ runs:
         comment-author: 'github-actions[bot]'
         body-includes: Deployed on
 
-    - name: Comment deploy on the PR
-      if: ${{ github.event_name == 'pull_request' && inputs.domain == '' }}
+    - name: Comment the preview link on the PR
+      if: ${{ github.event_name == 'pull_request' }}
       uses: peter-evans/create-or-update-comment@v5
       with:
         comment-id: ${{ steps.fc.outputs.comment-id }}
         issue-number: ${{ github.event.pull_request.number }}
         body: |
           Deployed on:
-          - https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
+          - https://${{ env.IPFS_CID }}.ipfs.aleph.sh
 
-          ${{ inputs.private-key == '' && '> This link is accessible until the static files are garbage collected, pass your private key to the action to avoid this.' || '' }}
+          > Previews are free and garbage-collected ~24 hours after upload. Re-run the job to refresh the link.
         edit-mode: replace
       continue-on-error: true
 
-    - name: Check if private key is present for linking
-      if: ${{ inputs.domain != '' && inputs.private-key == '' }}
+    # ----- Deploy flow (private key, outside of pull requests) -----
+
+    - name: Install the Aleph CLI
+      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
       run: |
-        echo "::error ::You must pass your private key to link the domain."
-        exit 1
+        set -euo pipefail
+        ALEPH_CLI_VERSION=0.13.0
+        mkdir -p "$RUNNER_TEMP/aleph-cli"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/aleph-cli/aleph" \
+          "https://github.com/aleph-im/aleph-rs/releases/download/v${ALEPH_CLI_VERSION}/aleph-cli-linux-x86_64"
+        chmod +x "$RUNNER_TEMP/aleph-cli/aleph"
+        echo "$RUNNER_TEMP/aleph-cli" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/aleph-cli/aleph" --version
 
-    - name: Link domain
-      if: ${{ inputs.domain != '' }}
+    - name: Prepare the deployment
+      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        INPUT_WEBSITE_NAME: ${{ inputs.website-name }}
+        INPUT_OWNER_ADDRESS: ${{ inputs.owner-address }}
       run: |
-        bash -c "echo 'y' | aleph domain attach '${{ inputs.domain }}' --item-hash $ITEM_HASH"
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
 
-    - name: Comment domain deploy on the PR
-      if: ${{ inputs.domain != '' && github.event_name == 'pull_request' }}
-      uses: peter-evans/create-or-update-comment@v5
-      with:
-        comment-id: ${{ steps.fc.outputs.comment-id }}
-        issue-number: ${{ github.event.pull_request.number }}
-        body: |
-          Deployed on https://${{ inputs.domain }}
-        edit-mode: replace
-      continue-on-error: true
+        NAME="${INPUT_WEBSITE_NAME:-${GITHUB_REPOSITORY##*/}}"
+        NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
 
-    - name: Run stale file cleanup
-      if: ${{ inputs.retention_days != '' }}
+        # Resolve the signer address from the private key: --dry-run signs
+        # without submitting anything, and the signed message contains the
+        # sender address (the CID is an arbitrary valid placeholder)
+        SIGNER=$(aleph file pin QmavALnybU8P19w8G1yhxyzWWfP6emKKPKFiaFmjXhKdYE --dry-run --chain eth --json | jq -r '.sender')
+
+        {
+          echo "WEBSITE_NAME=$NAME"
+          echo "SIGNER_ADDRESS=$SIGNER"
+          echo "OWNER_ADDRESS=$INPUT_OWNER_ADDRESS"
+          echo "BILLING_ADDRESS=${INPUT_OWNER_ADDRESS:-$SIGNER}"
+        } >> "$GITHUB_ENV"
+
+        echo "Website: $NAME | Signer: $SIGNER | Owner: ${INPUT_OWNER_ADDRESS:-$SIGNER}"
+
+    - name: Check authorization and credits
+      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
       run: |
-          set -euo pipefail
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
 
-          STALE_DAYS="${{ inputs.retention_days }}"
-
-          echo "Checking for files older than $STALE_DAYS days..."
-          THRESHOLD=$(date -u -d "-$STALE_DAYS days" +"%Y-%m-%dT%H:%M:%S")
-          echo "Threshold time: $THRESHOLD"
-
-          LIST_OUTPUT=$(mktemp)
-          ERR_LOG=/tmp/aleph_list_err.log
-
-          echo "Fetching Aleph files..."
-          aleph file list --json > "$LIST_OUTPUT" 2>"$ERR_LOG" || true
-
-          if [ ! -s "$LIST_OUTPUT" ]; then
-            echo "❌ No output captured from aleph file list"
-            cat "$ERR_LOG" || true
+        if [[ -n "$OWNER_ADDRESS" ]]; then
+          AUTH_COUNT=$(aleph authorization received --granter "$OWNER_ADDRESS" --chain eth --json | jq 'length')
+          if [[ "$AUTH_COUNT" -eq 0 ]]; then
+            echo "::error ::Wallet $SIGNER_ADDRESS has no authorization from $OWNER_ADDRESS. The owner must run: aleph authorization add $SIGNER_ADDRESS --message-types store,aggregate --aggregate-keys websites,domains --channels ALEPH-CLOUDSOLUTIONS"
             exit 1
           fi
+        fi
 
-          if grep -qE "Failed to retrieve files|Status code" "$LIST_OUTPUT"; then
-            echo "⚠️ Aleph returned an error instead of JSON:"
-            cat "$LIST_OUTPUT"
-            exit 0
+        CREDITS=$(aleph account balance "$BILLING_ADDRESS" --json | jq -r '.credits // 0 | floor')
+        if [[ "$CREDITS" -le 0 ]]; then
+          echo "::error ::$BILLING_ADDRESS has no Aleph credits, the website would be garbage-collected within ~24 hours. Buy credits with 'aleph credit buy' or on the Aleph Cloud console."
+          exit 1
+        fi
+        echo "Billing address $BILLING_ADDRESS holds $CREDITS credits"
+
+    - name: Deploy the website
+      if: ${{ steps.mode.outputs.preview == 'false' }}
+      shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        SITE_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
+        OBO=()
+        [[ -n "$OWNER_ADDRESS" ]] && OBO=(--on-behalf-of "$OWNER_ADDRESS")
+
+        OUT=$(mktemp)
+        if aleph website show "$WEBSITE_NAME" --address "$BILLING_ADDRESS" --json > /dev/null 2>&1; then
+          echo "Updating existing website '$WEBSITE_NAME'..."
+          aleph website update "$WEBSITE_NAME" "$SITE_PATH" --payment-type credit --chain eth --json "${OBO[@]}" > "$OUT"
+        else
+          echo "Deploying new website '$WEBSITE_NAME'..."
+          aleph website deploy "$WEBSITE_NAME" "$SITE_PATH" --payment-type credit --chain eth --json "${OBO[@]}" > "$OUT"
+        fi
+        cat "$OUT"
+
+        {
+          echo "IPFS_CID=$(jq -r '.ipfs_cid' "$OUT")"
+          echo "VOLUME_ID=$(jq -r '.volume_id // .new_volume_id' "$OUT")"
+          echo "WEBSITE_VERSION=$(jq -r '.version' "$OUT")"
+        } >> "$GITHUB_ENV"
+
+    - name: Link the domain
+      if: ${{ steps.mode.outputs.preview == 'false' && inputs.domain != '' }}
+      shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        DOMAIN: ${{ inputs.domain }}
+      run: |
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
+        OBO=()
+        [[ -n "$OWNER_ADDRESS" ]] && OBO=(--on-behalf-of "$OWNER_ADDRESS")
+
+        if aleph domain list --address "$BILLING_ADDRESS" --json | jq -e --arg d "$DOMAIN" 'any(.[]; .domain == $d)' > /dev/null; then
+          echo "Re-pointing existing domain $DOMAIN to '$WEBSITE_NAME'..."
+          aleph domain attach "$DOMAIN" --to "$WEBSITE_NAME" --chain eth --json "${OBO[@]}"
+        else
+          echo "Adding new domain $DOMAIN..."
+          aleph domain add "$DOMAIN" --target "$WEBSITE_NAME" --kind ipfs --chain eth --json "${OBO[@]}"
+          echo "::notice ::Domain $DOMAIN linked. If not done yet, configure these DNS records: CNAME $DOMAIN -> ipfs.public.aleph.sh | CNAME _dnslink.$DOMAIN -> _dnslink.$DOMAIN.static.public.aleph.sh | TXT _control.$DOMAIN -> $BILLING_ADDRESS"
+        fi
+
+    - name: Delete versions older than the retention period
+      if: ${{ steps.mode.outputs.preview == 'false' && inputs.retention_days != '' }}
+      shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        RETENTION_DAYS: ${{ inputs.retention_days }}
+      run: |
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
+        OBO=()
+        [[ -n "$OWNER_ADDRESS" ]] && OBO=(--on-behalf-of "$OWNER_ADDRESS")
+
+        THRESHOLD=$(( $(date +%s) - RETENTION_DAYS * 86400 ))
+        echo "Deleting versions of '$WEBSITE_NAME' created before $(date -u -d "@$THRESHOLD" +"%Y-%m-%dT%H:%M:%SZ")..."
+
+        HISTORY=$(aleph website show "$WEBSITE_NAME" --address "$BILLING_ADDRESS" --json | jq -r '.history // {} | to_entries[].value')
+        if [[ -z "$HISTORY" ]]; then
+          echo "No previous versions to clean up"
+          exit 0
+        fi
+
+        for VOLUME in $HISTORY; do
+          MSG=$(mktemp)
+          if ! curl -fsSL "https://api2.aleph.im/api/v0/messages/$VOLUME" -o "$MSG"; then
+            echo "⚠️ Could not fetch message $VOLUME, skipping"
+            continue
+          fi
+          STATUS=$(jq -r '.status // empty' "$MSG")
+          CREATED=$(jq -r '.message.time // empty' "$MSG")
+          FILE_CID=$(jq -r '.message.content.item_hash // empty' "$MSG")
+
+          if [[ "$STATUS" != "processed" || -z "$CREATED" || -z "$FILE_CID" ]]; then
+            echo "Skipping $VOLUME (status: ${STATUS:-unknown})"
+            continue
+          fi
+          if [[ "$FILE_CID" == "$IPFS_CID" ]]; then
+            echo "✅ Skipping $VOLUME (same content as the current version)"
+            continue
           fi
 
-          # Loop through files and delete stale ones
-          jq -c '.files[]?' < "$LIST_OUTPUT" | while read -r file; do
-            CREATED=$(echo "$file" | jq -r '.created')
-            ITEM_HASH=$(echo "$file" | jq -r '.item_hash')
+          if (( ${CREATED%.*} < THRESHOLD )); then
+            echo "🗑️ Deleting stale version volume $VOLUME"
+            aleph file delete "$FILE_CID" --reason "web3-hosting-action retention" --yes --chain eth "${OBO[@]}" \
+              || echo "⚠️ Could not delete $FILE_CID (already deleted?)"
+          else
+            echo "✅ Keeping version volume $VOLUME"
+          fi
+        done
 
-            if [[ "$CREATED" < "$THRESHOLD" ]]; then
-              echo "🗑️ Deleting stale file with item_hash: $ITEM_HASH (created: $CREATED)"
-              aleph file forget "$ITEM_HASH" 2>/tmp/aleph_forget_err.log
-            else
-              echo "✅ Skipping fresh file (created: $CREATED)"
-            fi
-          done
+    # ----- Common -----
 
     - name: Set outputs
       id: set-outputs
       shell: bash
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        PREVIEW: ${{ steps.mode.outputs.preview }}
       run: |
-        if [[ -n "${{ inputs.domain }}" ]]; then
-          URL=https://${{ inputs.domain }}
+        set -euo pipefail
+        if [[ -n "$DOMAIN" && "$PREVIEW" == "false" ]]; then
+          URL="https://$DOMAIN"
         else
-          URL=https://${{ env.IPFS_CID_V1 }}.ipfs.aleph.sh
+          URL="https://${IPFS_CID}.ipfs.aleph.sh"
         fi
-        echo "url=$url" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "url=$URL"
+          echo "cid=${IPFS_CID}"
+          echo "version=${WEBSITE_VERSION:-}"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### Deployed on Aleph Cloud 🚀"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| **URL** | $URL |"
+          echo "| **IPFS CID** | \`${IPFS_CID}\` |"
+          if [[ -n "${WEBSITE_VERSION:-}" ]]; then
+            echo "| **Version** | ${WEBSITE_VERSION} |"
+          fi
+          if [[ "$PREVIEW" == "true" ]]; then
+            echo ""
+            echo "> Preview, garbage-collected ~24 hours after upload."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
