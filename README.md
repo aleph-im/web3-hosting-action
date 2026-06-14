@@ -72,8 +72,9 @@ The website and its domains are owned by the owner wallet, and credits are consu
 
 ### Deploy previews
 
-On `pull_request` events, the action always deploys a free preview: no authentication required, no credits consumed, and a comment is added to the PR with the link to access it.\
-Previews are garbage-collected ~24 hours after upload (re-run the job to refresh the link), and never touch your domain or website versions.
+On `pull_request` events, the action deploys a preview of the pull request's build and comments the link on the PR. Each pull request gets its own preview (a website named `<website-name>-preview-pr-<number>`), updated on every commit. Previews use the same `private-key` (and `owner-address`, if you use delegation) as production and consume a small amount of credits.
+
+To keep credits low, the action keeps only the latest build per pull request, and removes a pull request's preview automatically once it is closed or merged. Closed PRs are detected on the next preview run using the workflow token, so you **don't** need to add a `closed` trigger (which would needlessly re-run your build on every merge).
 
 ```yml
 on:
@@ -84,6 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     name: An example job to deploy previews
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -98,9 +100,11 @@ jobs:
         uses: aleph-im/web3-hosting-action@v2
         with:
           path: 'out'
+          private-key: ${{ secrets.ALEPH_CI_PRIVATE_KEY }}
+          owner-address: '0xYourOwnerWalletAddress'
 ```
 
-> Don't forget the `pull-requests: write` permission, or the comment won't be posted on the PR.
+> The `pull-requests: write` permission is required so the action can comment the preview link and detect closed PRs to clean up their previews.
 
 ### Remove older versions
 
@@ -135,12 +139,13 @@ When linking a domain for the first time, configure the following DNS records (t
 
 | Name             | Description                                                                                       | Required | Default         |
 | ---------------- | ------------------------------------------------------------------------------------------------- | -------- | --------------- |
-| `path`           | Path to the static website's files (eg frontend/out)                                              | ✅        |                 |
-| `private-key`    | The private key of the Ethereum wallet used to sign the deployment                                |          |                 |
-| `owner-address`  | Address of the wallet that owns the website and pays with its credits (delegated deployments)     |          |                 |
-| `website-name`   | Identifier of the website on your Aleph account                                                   |          | Repository name |
-| `domain`         | Domain name to link to the deployed site (eg libertai.io)                                         |          |                 |
-| `retention_days` | Delete previous versions of this website older than this number of days. Leave blank to keep all  |          |                 |
+| `path`           | Path to the static website's files (eg frontend/out)                                              | ✅        |                    |
+| `private-key`    | The private key of the Ethereum wallet used to sign the deployment                                | ✅        |                    |
+| `owner-address`  | Address of the wallet that owns the website and pays with its credits (delegated deployments)     |          |                    |
+| `website-name`   | Identifier of the website on your Aleph account                                                   |          | Repository name    |
+| `domain`         | Domain name to link to the deployed site (eg libertai.io). Ignored for previews                   |          |                    |
+| `retention_days` | Delete previous versions of this website older than this number of days. Leave blank to keep all  |          |                    |
+| `github-token`   | Token used to detect closed pull requests and clean up their previews                             |          | Workflow token     |
 
 ## Outputs
 
@@ -173,9 +178,9 @@ You can get the following outputs from this action:
 
 ## Migrating from v1
 
-- The same `private-key` secret works unchanged (raw hex private key).
+- The same `private-key` secret works unchanged (raw hex private key), but it is now **required**, including for pull request previews.
 - Payment switched from holding ALEPH tokens to [credits](https://docs.aleph.cloud/devhub/sdks-and-tools/aleph-cli/commands/credits.html): the owning wallet must hold credits or the deployed content is garbage-collected.
 - Websites are now registered on your Aleph account with a name and version history, instead of being a bare IPFS pin.
-- `pull_request` events now always deploy a free ephemeral preview, even if a private key is passed: production deployments only happen on other events (push, workflow_dispatch...).
+- `pull_request` events deploy a per-PR preview (authenticated like production, kept to a single build, and removed automatically once the PR is closed); production deployments happen on other events (push, workflow_dispatch...).
 - `retention_days` now only deletes the previous versions of this website, instead of all the files of the account older than the threshold.
 - New `owner-address` input for delegated deployments with a single owner wallet and low-privilege CI keys.
