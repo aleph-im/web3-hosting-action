@@ -74,7 +74,7 @@ The website and its domains are owned by the owner wallet, and credits are consu
 
 On `pull_request` events, the action deploys a preview of the pull request's build and comments the link on the PR. Each pull request gets its own preview (a website named `<website-name>-preview-pr-<number>`), updated on every commit. Previews use the same `private-key` (and `owner-address`, if you use delegation) as production and consume a small amount of credits.
 
-To keep credits low, the action keeps only the latest build per pull request, and removes a pull request's preview automatically once it is closed or merged. Closed PRs are detected on the next preview run using the workflow token, so you **don't** need to add a `closed` trigger (which would needlessly re-run your build on every merge).
+To keep credits low, the action keeps only the latest build per pull request, and removes a pull request's preview automatically once it is closed or merged.
 
 ```yml
 on:
