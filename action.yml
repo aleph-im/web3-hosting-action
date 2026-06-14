@@ -164,8 +164,9 @@ runs:
             continue
           fi
           echo "🧹 Reaping preview for closed PR #$PR ($SITE)"
-          aleph website show "$SITE" --address "$BILLING_ADDRESS" --json > /tmp/reap.json || continue
-          VOLS=$( { jq -r '.volume_id // empty' /tmp/reap.json; jq -r '.history // {} | to_entries[].value' /tmp/reap.json; } | sort -u | tr '\n' ' ')
+          REAP=$(mktemp)
+          aleph website show "$SITE" --address "$BILLING_ADDRESS" --json > "$REAP" || continue
+          VOLS=$( { jq -r '.volume_id // empty' "$REAP"; jq -r '.history // {} | to_entries[].value' "$REAP"; } | sort -u | tr '\n' ' ')
           if [[ -n "${VOLS// /}" ]]; then
             # shellcheck disable=SC2086
             aleph message forget $VOLS --reason "preview cleanup (PR #$PR closed)" --yes --chain eth "${OBO[@]}" \
@@ -196,12 +197,15 @@ runs:
           aleph website deploy "$WEBSITE_NAME" "$SITE_PATH" --payment-type credit --chain eth --json "${OBO[@]}" > "$OUT"
         fi
         cat "$OUT"
+        NEW_VOLUME=$(jq -r '.volume_id // .new_volume_id' "$OUT")
         echo "IPFS_CID=$(jq -r '.ipfs_cid' "$OUT")" >> "$GITHUB_ENV"
 
         # Keep only the latest preview version: forget every superseded volume
-        # so an open PR never costs more than one pinned file.
+        # so an open PR never costs more than one pinned file. The current
+        # volume is stored in `.volume_id`, never in `.history`, but exclude it
+        # explicitly so a fresh deploy can never forget its own files.
         STALE=$(aleph website show "$WEBSITE_NAME" --address "$BILLING_ADDRESS" --json \
-          | jq -r '.history // {} | to_entries[].value' | sort -u | tr '\n' ' ')
+          | jq -r --arg cur "$NEW_VOLUME" '.history // {} | to_entries[].value | select(. != $cur)' | sort -u | tr '\n' ' ')
         if [[ -n "${STALE// /}" ]]; then
           # shellcheck disable=SC2086
           aleph message forget $STALE --reason "preview superseded" --yes --chain eth "${OBO[@]}" \
