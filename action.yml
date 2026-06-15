@@ -11,8 +11,7 @@ inputs:
     required: true
   private-key:
     description: 'The private key of the Ethereum wallet used to sign the deployment'
-    required: false
-    default: ''
+    required: true
   owner-address:
     description: 'Address of the wallet that owns the website and pays with its credits. Requires an authorization granted to the signing wallet. Leave blank to own and pay with the signing wallet directly'
     required: false
@@ -22,13 +21,17 @@ inputs:
     required: false
     default: ''
   domain:
-    description: 'Domain name to link to the deployed site (eg libertai.io)'
+    description: 'Domain name to link to the deployed site (eg libertai.io). Ignored for pull request previews'
     required: false
     default: ''
   retention_days:
     description: "Delete previous versions of this website older than this number of days. Leave blank to keep all versions"
     required: false
     default: ""
+  github-token:
+    description: "Token used to detect closed pull requests and clean up their previews. Defaults to the workflow token"
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   url:
@@ -44,87 +47,25 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Select mode
+    - name: Validate inputs and select mode
       id: mode
       shell: bash
       env:
         PRIVATE_KEY: ${{ inputs.private-key }}
       run: |
-        if [[ "$GITHUB_EVENT_NAME" == "pull_request" || -z "$PRIVATE_KEY" ]]; then
+        if [[ -z "$PRIVATE_KEY" ]]; then
+          echo "::error ::A private key is required. Pass the 'private-key' input."
+          exit 1
+        fi
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
           echo "preview=true" >> "$GITHUB_OUTPUT"
-          echo "Mode: preview (free, garbage-collected ~24h after upload)"
+          echo "Mode: preview (pull request #${{ github.event.pull_request.number }})"
         else
           echo "preview=false" >> "$GITHUB_OUTPUT"
           echo "Mode: deploy"
         fi
 
-    - name: Check domain requirements
-      if: ${{ steps.mode.outputs.preview == 'true' && inputs.domain != '' }}
-      shell: bash
-      env:
-        PRIVATE_KEY: ${{ inputs.private-key }}
-        DOMAIN: ${{ inputs.domain }}
-      run: |
-        if [[ -z "$PRIVATE_KEY" ]]; then
-          echo "::error ::You must pass your private key to link a domain."
-          exit 1
-        fi
-        echo "::notice ::Previews never touch your domain: '$DOMAIN' is only linked when deploying outside of pull requests."
-
-    # ----- Preview flow (pull requests, or no private key) -----
-
-    - name: Set up Python
-      if: ${{ steps.mode.outputs.preview == 'true' }}
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-
-    - name: Install dependencies
-      if: ${{ steps.mode.outputs.preview == 'true' }}
-      shell: bash
-      run: pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
-
-    - name: Upload preview on IPFS
-      if: ${{ steps.mode.outputs.preview == 'true' }}
-      shell: bash
-      env:
-        SITE_PATH: ${{ inputs.path }}
-      run: |
-        set -euo pipefail
-        CID=$(python "$GITHUB_ACTION_PATH/publish-on-aleph.py" "$SITE_PATH" | jq -r '.cid')
-        if [[ -z "$CID" || "$CID" == "null" ]]; then
-          echo "::error ::No CID returned by the IPFS upload"
-          exit 1
-        fi
-        echo "IPFS_CID=$CID" >> "$GITHUB_ENV"
-
-    - name: Find existing PR comment
-      if: ${{ github.event_name == 'pull_request' }}
-      uses: peter-evans/find-comment@v4
-      id: fc
-      with:
-        issue-number: ${{ github.event.pull_request.number }}
-        comment-author: 'github-actions[bot]'
-        body-includes: Deployed on
-
-    - name: Comment the preview link on the PR
-      if: ${{ github.event_name == 'pull_request' }}
-      uses: peter-evans/create-or-update-comment@v5
-      with:
-        comment-id: ${{ steps.fc.outputs.comment-id }}
-        issue-number: ${{ github.event.pull_request.number }}
-        body: |
-          Deployed on:
-          - https://${{ env.IPFS_CID }}.ipfs.aleph.sh
-
-          > Previews are free and garbage-collected ~24 hours after upload. Re-run the job to refresh the link.
-        edit-mode: replace
-      continue-on-error: true
-
-    # ----- Deploy flow (private key, outside of pull requests) -----
-
     - name: Install the Aleph CLI
-      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -137,35 +78,42 @@ runs:
         "$RUNNER_TEMP/aleph-cli/aleph" --version
 
     - name: Prepare the deployment
-      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
       env:
         ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
         INPUT_WEBSITE_NAME: ${{ inputs.website-name }}
         INPUT_OWNER_ADDRESS: ${{ inputs.owner-address }}
+        PREVIEW: ${{ steps.mode.outputs.preview }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
         set -euo pipefail
         export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
 
-        NAME="${INPUT_WEBSITE_NAME:-${GITHUB_REPOSITORY##*/}}"
-        NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+        BASE="${INPUT_WEBSITE_NAME:-${GITHUB_REPOSITORY##*/}}"
+        BASE=$(echo "$BASE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+
+        if [[ "$PREVIEW" == "true" ]]; then
+          WEBSITE_NAME="${BASE}-preview-pr-${PR_NUMBER}"
+        else
+          WEBSITE_NAME="$BASE"
+        fi
 
         # Resolve the signer address from the private key: --dry-run signs
-        # without submitting anything, and the signed message contains the
-        # sender address (the CID is an arbitrary valid placeholder)
+        # without submitting anything, and the signed message carries the
+        # sender address (the CID below is an arbitrary valid placeholder).
         SIGNER=$(aleph file pin QmavALnybU8P19w8G1yhxyzWWfP6emKKPKFiaFmjXhKdYE --dry-run --chain eth --json | jq -r '.sender')
 
         {
-          echo "WEBSITE_NAME=$NAME"
+          echo "WEBSITE_BASE=$BASE"
+          echo "WEBSITE_NAME=$WEBSITE_NAME"
           echo "SIGNER_ADDRESS=$SIGNER"
           echo "OWNER_ADDRESS=$INPUT_OWNER_ADDRESS"
           echo "BILLING_ADDRESS=${INPUT_OWNER_ADDRESS:-$SIGNER}"
         } >> "$GITHUB_ENV"
 
-        echo "Website: $NAME | Signer: $SIGNER | Owner: ${INPUT_OWNER_ADDRESS:-$SIGNER}"
+        echo "Website: $WEBSITE_NAME | Signer: $SIGNER | Owner: ${INPUT_OWNER_ADDRESS:-$SIGNER}"
 
     - name: Check authorization and credits
-      if: ${{ steps.mode.outputs.preview == 'false' }}
       shell: bash
       env:
         ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
@@ -183,10 +131,111 @@ runs:
 
         CREDITS=$(aleph account balance "$BILLING_ADDRESS" --json | jq -r '.credits // 0 | floor')
         if [[ "$CREDITS" -le 0 ]]; then
-          echo "::error ::$BILLING_ADDRESS has no Aleph credits, the website would be garbage-collected within ~24 hours. Buy credits with 'aleph credit buy' or on the Aleph Cloud console."
+          echo "::error ::$BILLING_ADDRESS has no Aleph credits, the deployment would be garbage-collected within ~24 hours. Buy credits with 'aleph credit buy' or on the Aleph Cloud console."
           exit 1
         fi
         echo "Billing address $BILLING_ADDRESS holds $CREDITS credits"
+
+    # ----- Preview flow (pull requests) -----
+
+    - name: Clean up previews of closed pull requests
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
+        OBO=()
+        [[ -n "$OWNER_ADDRESS" ]] && OBO=(--on-behalf-of "$OWNER_ADDRESS")
+
+        # List this repository's preview websites and drop the ones whose
+        # pull request is closed, releasing their file pins so they stop
+        # consuming credits. Done here (not on a `closed` trigger) so the
+        # action stays a single step of the normal build workflow.
+        SITES=$(aleph website list --address "$BILLING_ADDRESS" --json \
+          | jq -r --arg b "$WEBSITE_BASE" '.[] | select(.name | test("^" + $b + "-preview-pr-[0-9]+$")) | .name')
+
+        for SITE in $SITES; do
+          PR="${SITE##*-pr-}"
+          STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.state' 2>/dev/null || echo "")
+          if [[ "$STATE" != "closed" ]]; then
+            continue
+          fi
+          echo "🧹 Reaping preview for closed PR #$PR ($SITE)"
+          REAP=$(mktemp)
+          aleph website show "$SITE" --address "$BILLING_ADDRESS" --json > "$REAP" || continue
+          VOLS=$( { jq -r '.volume_id // empty' "$REAP"; jq -r '.history // {} | to_entries[].value' "$REAP"; } | sort -u | tr '\n' ' ')
+          if [[ -n "${VOLS// /}" ]]; then
+            # shellcheck disable=SC2086
+            aleph message forget $VOLS --reason "preview cleanup (PR #$PR closed)" --yes --chain eth "${OBO[@]}" \
+              || echo "⚠️ Could not forget files for $SITE"
+          fi
+          aleph website delete "$SITE" --yes --chain eth "${OBO[@]}" \
+            || echo "⚠️ Could not delete website entry $SITE"
+        done
+
+    - name: Deploy the preview
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      shell: bash
+      env:
+        ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        SITE_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
+        OBO=()
+        [[ -n "$OWNER_ADDRESS" ]] && OBO=(--on-behalf-of "$OWNER_ADDRESS")
+
+        OUT=$(mktemp)
+        if aleph website show "$WEBSITE_NAME" --address "$BILLING_ADDRESS" --json > /dev/null 2>&1; then
+          echo "Updating preview '$WEBSITE_NAME'..."
+          aleph website update "$WEBSITE_NAME" "$SITE_PATH" --payment-type credit --chain eth --json "${OBO[@]}" > "$OUT"
+        else
+          echo "Creating preview '$WEBSITE_NAME'..."
+          aleph website deploy "$WEBSITE_NAME" "$SITE_PATH" --payment-type credit --chain eth --json "${OBO[@]}" > "$OUT"
+        fi
+        cat "$OUT"
+        NEW_VOLUME=$(jq -r '.volume_id // .new_volume_id' "$OUT")
+        echo "IPFS_CID=$(jq -r '.ipfs_cid' "$OUT")" >> "$GITHUB_ENV"
+
+        # Keep only the latest preview version: forget every superseded volume
+        # so an open PR never costs more than one pinned file. The current
+        # volume is stored in `.volume_id`, never in `.history`, but exclude it
+        # explicitly so a fresh deploy can never forget its own files.
+        STALE=$(aleph website show "$WEBSITE_NAME" --address "$BILLING_ADDRESS" --json \
+          | jq -r --arg cur "$NEW_VOLUME" '.history // {} | to_entries[].value | select(. != $cur)' | sort -u | tr '\n' ' ')
+        if [[ -n "${STALE// /}" ]]; then
+          # shellcheck disable=SC2086
+          aleph message forget $STALE --reason "preview superseded" --yes --chain eth "${OBO[@]}" \
+            || echo "⚠️ Could not forget superseded preview files"
+        fi
+
+    - name: Find existing PR comment
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      uses: peter-evans/find-comment@v4
+      id: fc
+      with:
+        issue-number: ${{ github.event.pull_request.number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: Deployed on
+
+    - name: Comment the preview link on the PR
+      if: ${{ steps.mode.outputs.preview == 'true' }}
+      uses: peter-evans/create-or-update-comment@v5
+      with:
+        comment-id: ${{ steps.fc.outputs.comment-id }}
+        issue-number: ${{ github.event.pull_request.number }}
+        body: |
+          Deployed on:
+          - https://${{ env.IPFS_CID }}.ipfs.aleph.sh
+
+          > Preview for this pull request, updated on every commit and removed once the PR is closed.
+        edit-mode: replace
+      continue-on-error: true
+
+    # ----- Deploy flow (outside of pull requests) -----
 
     - name: Deploy the website
       if: ${{ steps.mode.outputs.preview == 'false' }}
@@ -266,23 +315,18 @@ runs:
           fi
           STATUS=$(jq -r '.status // empty' "$MSG")
           CREATED=$(jq -r '.message.time // empty' "$MSG")
-          FILE_CID=$(jq -r '.message.content.item_hash // empty' "$MSG")
 
-          if [[ "$STATUS" != "processed" || -z "$CREATED" || -z "$FILE_CID" ]]; then
+          if [[ "$STATUS" != "processed" || -z "$CREATED" ]]; then
             echo "Skipping $VOLUME (status: ${STATUS:-unknown})"
-            continue
-          fi
-          if [[ "$FILE_CID" == "$IPFS_CID" ]]; then
-            echo "✅ Skipping $VOLUME (same content as the current version)"
             continue
           fi
 
           if (( ${CREATED%.*} < THRESHOLD )); then
-            echo "🗑️ Deleting stale version volume $VOLUME"
-            aleph file delete "$FILE_CID" --reason "web3-hosting-action retention" --yes --chain eth "${OBO[@]}" \
-              || echo "⚠️ Could not delete $FILE_CID (already deleted?)"
+            echo "🗑️ Deleting stale version $VOLUME"
+            aleph message forget "$VOLUME" --reason "web3-hosting-action retention" --yes --chain eth "${OBO[@]}" \
+              || echo "⚠️ Could not forget $VOLUME (already deleted?)"
           else
-            echo "✅ Keeping version volume $VOLUME"
+            echo "✅ Keeping version $VOLUME"
           fi
         done
 
@@ -320,6 +364,6 @@ runs:
           fi
           if [[ "$PREVIEW" == "true" ]]; then
             echo ""
-            echo "> Preview, garbage-collected ~24 hours after upload."
+            echo "> Pull request preview."
           fi
         } >> "$GITHUB_STEP_SUMMARY"
