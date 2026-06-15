@@ -59,9 +59,19 @@ runs:
         fi
         if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
           echo "preview=true" >> "$GITHUB_OUTPUT"
-          echo "Mode: preview (pull request #${{ github.event.pull_request.number }})"
+          # On a `closed` event (PR closed or merged) we only tear the preview
+          # down - never redeploy it. This lets a workflow add `closed` to its
+          # trigger types for instant teardown without recreating the preview.
+          if [[ "${{ github.event.action }}" == "closed" ]]; then
+            echo "cleanup_only=true" >> "$GITHUB_OUTPUT"
+            echo "Mode: preview cleanup (pull request #${{ github.event.pull_request.number }} closed)"
+          else
+            echo "cleanup_only=false" >> "$GITHUB_OUTPUT"
+            echo "Mode: preview (pull request #${{ github.event.pull_request.number }})"
+          fi
         else
           echo "preview=false" >> "$GITHUB_OUTPUT"
+          echo "cleanup_only=false" >> "$GITHUB_OUTPUT"
           echo "Mode: deploy"
         fi
 
@@ -117,6 +127,7 @@ runs:
       shell: bash
       env:
         ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
+        CLEANUP_ONLY: ${{ steps.mode.outputs.cleanup_only }}
       run: |
         set -euo pipefail
         export ALEPH_PRIVATE_KEY="${ALEPH_PRIVATE_KEY#0x}"
@@ -127,6 +138,13 @@ runs:
             echo "::error ::Wallet $SIGNER_ADDRESS has no authorization from $OWNER_ADDRESS. The owner must run: aleph authorization add $SIGNER_ADDRESS --message-types store,aggregate --aggregate-keys websites,domains --channels ALEPH-CLOUDSOLUTIONS"
             exit 1
           fi
+        fi
+
+        # Tearing a preview down does not cost credits, and you may be cleaning
+        # up precisely because the wallet ran dry - so skip the credit check.
+        if [[ "$CLEANUP_ONLY" == "true" ]]; then
+          echo "Cleanup-only run: skipping the credit check"
+          exit 0
         fi
 
         CREDITS=$(aleph account balance "$BILLING_ADDRESS" --json | jq -r '.credits // 0 | floor')
@@ -152,8 +170,11 @@ runs:
 
         # List this repository's preview websites and drop the ones whose
         # pull request is closed, releasing their file pins so they stop
-        # consuming credits. Done here (not on a `closed` trigger) so the
-        # action stays a single step of the normal build workflow.
+        # consuming credits. This runs on every pull request event, so closed
+        # previews are reaped by later PR activity even without a `closed`
+        # trigger; adding `closed` to the workflow's trigger types makes the
+        # teardown happen immediately (this step still runs, the deploy steps
+        # below are skipped).
         SITES=$(aleph website list --address "$BILLING_ADDRESS" --json \
           | jq -r --arg b "$WEBSITE_BASE" '.[] | select(.name | test("^" + $b + "-preview-pr-[0-9]+$")) | .name')
 
@@ -177,7 +198,7 @@ runs:
         done
 
     - name: Deploy the preview
-      if: ${{ steps.mode.outputs.preview == 'true' }}
+      if: ${{ steps.mode.outputs.preview == 'true' && steps.mode.outputs.cleanup_only != 'true' }}
       shell: bash
       env:
         ALEPH_PRIVATE_KEY: ${{ inputs.private-key }}
@@ -213,7 +234,7 @@ runs:
         fi
 
     - name: Find existing PR comment
-      if: ${{ steps.mode.outputs.preview == 'true' }}
+      if: ${{ steps.mode.outputs.preview == 'true' && steps.mode.outputs.cleanup_only != 'true' }}
       uses: peter-evans/find-comment@v4
       id: fc
       with:
@@ -222,7 +243,7 @@ runs:
         body-includes: Deployed on
 
     - name: Comment the preview link on the PR
-      if: ${{ steps.mode.outputs.preview == 'true' }}
+      if: ${{ steps.mode.outputs.preview == 'true' && steps.mode.outputs.cleanup_only != 'true' }}
       uses: peter-evans/create-or-update-comment@v5
       with:
         comment-id: ${{ steps.fc.outputs.comment-id }}
@@ -334,6 +355,8 @@ runs:
 
     - name: Set outputs
       id: set-outputs
+      # Nothing is deployed on a cleanup-only run, so there are no outputs to set.
+      if: ${{ steps.mode.outputs.cleanup_only != 'true' }}
       shell: bash
       env:
         DOMAIN: ${{ inputs.domain }}
