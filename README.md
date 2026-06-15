@@ -79,6 +79,10 @@ To keep credits low, the action keeps only the latest build per pull request, an
 ```yml
 on:
   pull_request:
+    # Add `closed` to tear a preview down the moment its PR is closed or merged.
+    # Without it, closed previews are still reaped, but only on the next pull
+    # request event (see "Preview cleanup" below).
+    types: [opened, synchronize, reopened, closed]
 
 jobs:
   deploy-previews:
@@ -105,6 +109,13 @@ jobs:
 ```
 
 > The `pull-requests: write` permission is required so the action can comment the preview link and detect closed PRs to clean up their previews.
+
+#### Preview cleanup
+
+On every pull request event the action first reaps the previews of any pull requests that are now closed, then deploys the current one. So previews are always cleaned up, but the timing depends on your trigger:
+
+- **Without `closed`** in `types` (the default `pull_request` trigger): a closed PR's preview is removed on the next pull request event from any PR. Simple, but a preview can linger if the repository goes quiet.
+- **With `closed`** in `types`: the action runs in cleanup-only mode for that event - it tears the preview down immediately and skips the deploy and comment steps (so it never recreates the preview it just removed). This run does not require credits on the billing wallet.
 
 ### Remove older versions
 
